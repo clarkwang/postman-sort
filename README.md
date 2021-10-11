@@ -7,13 +7,13 @@ See the following feature requests in the Postman project:
 
 # How to use
 
-1. In Postman, export a collection to a JSON file (e.g. `unsorted.json`) in `v2.1` format.
+1. In Postman, export a collection or environment to a JSON file (e.g. `unsorted.json`) in `v2.1` format.
 1. Run
 
     ~~~
-    python3 postman-sort.py unsorted.json > sorted.json
+    python3 pm-sort.py unsorted.json > sorted.json
     # or
-    python3 postman-sort.py < unsorted.json > sorted.json
+    python3 pm-sort.py < unsorted.json > sorted.json
     ~~~
     
 1. In Postman, import `sorted.json`. (To be safe, choose `Import as Copy` whe prompted.)
