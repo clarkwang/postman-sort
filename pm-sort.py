@@ -11,58 +11,69 @@
 
 import json
 import sys
+from types import SimpleNamespace
 
-def dichain_has(d, dotted):
-    keys = dotted.split('.')
-    assert keys and all(keys)
-
-    for key in keys:
-        if type(d) is not dict:
-            return False
-        if key not in d:
-            return False
+class NsEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, SimpleNamespace):
+            return self.encode_hook(obj)
         else:
-            d = d.get(key)
+            # should not reach here
+            return super().default(obj)
+
+    # obj --> dict
+    @staticmethod
+    def encode_hook(obj):
+       #assert isinstance(obj, SimpleNamespace)
+        return obj.__dict__
+
+class NsDecoder(json.JSONDecoder):
+    def decode(self, s):
+        return json.JSONDecoder(object_hook=self.decode_hook).decode(s)
+
+    # obj <-- { 'k1': 'v1', 'k2': 'v2', ... }
+    @staticmethod
+    def decode_hook(d):
+        return SimpleNamespace(**d)
+
+    # obj <-- [('k1', 'v1'), ('k2', 'v2'), ...]
+    @staticmethod
+    def decode_pairs_hook(pairs):
+        d = dict(pairs)
+        return NsDecoder.decode_hook(d)
+
+def hasattr_dotted(obj, attrs):
+    for attr in attrs.split('.'):
+        if hasattr(obj, attr):
+            obj = getattr(obj, attr)
+        else:
+            return False
+
     return True
 
-def dichain_get(d, dotted):
-    keys = dotted.split('.')
-    assert keys and all(keys)
+def getattr_dotted(obj, attrs, default=None):
+    assert attrs
 
-    for key in keys:
-        if type(d) is not dict:
-            return None
-        if key not in d:
-            return None
+    for attr in attrs.split('.'):
+        if hasattr(obj, attr):
+            obj = getattr(obj, attr)
         else:
-            d = d.get(key)
-    return d
-
-def dichain_set(d, dotted, value):
-    keys = dotted.split('.')
-    assert keys and all(keys)
-
-    saved = d
-    for key in keys[:-1]:
-        assert type(d) is dict and key in d
-        d = d[key]
-
-    assert type(d) is dict
-    d[keys[-1]] = value
-
-    return saved
+            return default
+    else:
+        return obj
 
 # sort request's query params
 def postman_sort_req(req):
     if not req:
         return req
-    if not dichain_has(req, 'url.query'):
+    if not hasattr_dotted(req, 'url.query'):
         return req
 
-    queries = dichain_get(req, 'url.query')
-    queries.sort(key=lambda x: x['key'].lower() )
+    queries = req.url.query
+    # 'key' may be null.
+    queries.sort(key=lambda x: (x.key or '').lower() )
 
-    dichain_set(req, 'url.query', queries)
+    req.url.query = queries
     return req
 
 # sort responses and responses' query params
@@ -70,42 +81,51 @@ def postman_sort_resp(resps):
     if not resps:
         return resps
 
-    resps.sort(key=lambda x: x['name'].lower() )
+    resps.sort(key=lambda x: x.name.lower() )
 
     for resp in resps:
-        if dichain_has(resp, 'originalRequest.url.query'):
-            queries = dichain_get(resp, 'originalRequest.url.query')
-            queries.sort(key=lambda x: x['key'].lower() )
+        if hasattr_dotted(resp, 'originalRequest.url.query'):
+            queries = resp.originalRequest.url.query
+            queries.sort(key=lambda x: (x.key or '').lower() )
 
-            dichain_set(resp, 'originalRequest.url.query', queries)
+            resp.originalRequest.url.query = queries
     return resps
 
-def postman_sort(js):
-    if not js or type(js) is not dict:
+def postman_sort(js, _level=1):
+    if not js or type(js) is not SimpleNamespace:
         return js
 
-    items = js.get('item')
+    items = js.item
     if not items or type(items) is not list:
         return js
 
     for i in range(len(items) ):
         item = items[i]
-        if 'item' in item:
+        if hasattr(item, 'item'):
             # folders (may be nested) under the collection
-            items[i] = postman_sort(item)
+            items[i] = postman_sort(item, _level=_level + 1)
         else:
             # requests
-            if 'request' in item:
-                req = item['request']
-                item['request'] = postman_sort_req(req)
+            if hasattr(item, 'request'):
+                req = item.request
+                item.request = postman_sort_req(req)
             # example responses
-            if 'response' in item:
-                resps = item['response']
-                item['response'] = postman_sort_resp(resps)
+            if hasattr(item, 'response'):
+                resps = item.response
+                item.response = postman_sort_resp(resps)
             items[i] = item
 
-    js['item'] = sorted(items, key=lambda x: x['name'].lower() )
+    js.item = sorted(items, key=lambda x: x.name.lower() )
 
+    # collection variables
+    if _level == 1 and getattr(js, 'variable', None):
+        assert type(js.variable) is list
+        js.variable.sort(key=lambda x: x.key if x.key.isupper() else x.key.lower() )
+
+    return js
+
+def postman_sort_env(js):
+    js.values.sort(key=lambda x: x.key if x.key.isupper() else x.key.lower() )
     return js
 
 def main():
@@ -114,23 +134,23 @@ def main():
     else:
         fp = sys.stdin
 
-    if 1:
-        data = fp.read()
-        assert 'json/collection/v2.1' in data
-        js = json.loads(data)
+    js = json.load(fp, cls=NsDecoder)
+    dump_before = json.dumps(js, cls=NsEncoder)
+
+    # Postman environment
+    if getattr(js, '_postman_variable_scope', '') == 'environment':
+        js = postman_sort_env(js)
+
+        # Postman collection
+    elif '/collection/v2.1.0/' in getattr_dotted(js, 'info.schema', ''):
+        # https://schema.getpostman.com/json/collection/v2.1.0/collection.json
+        js = postman_sort(js)
     else:
-        js = json.load(fp)
+        raise Exception('unknown format: neither collection nor environment')
 
-    dump_before = json.dumps(js)
-
-    js = postman_sort(js)
-    dump_after = json.dumps(js)
-
+    dump_after = json.dumps(js, cls=NsEncoder)
     assert len(dump_before) == len(dump_after)
 
-    if 1:
-        print(dump_after)
-    else:
-        json.dump(js, sys.stdout, sort_keys=False)
+    print(dump_after)
 
 main()
