@@ -1,6 +1,6 @@
 # Why
 
-See the following feature requests in the Postman project:
+See the following discussions in the Postman project:
 
 * https://github.com/postmanlabs/postman-app-support/issues/4253
 * https://github.com/postmanlabs/postman-app-support/issues/5222
